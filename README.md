@@ -205,3 +205,35 @@ Important notes for Windows:
 - `aubio` is optional on Windows because the app now includes a NumPy-based live pitch fallback.
 - `FFmpeg` is still required for preprocessing and cache generation.
 - Key shift needs an FFmpeg build that includes the `rubberband` filter.
+
+
+## Quick Start (Windows)
+
+1. Open PowerShell in the repo root.
+2. Install dependencies:
+
+   .\scripts\windows\install_windows.ps1 -InstallFFmpeg
+
+3. Check environment:
+
+   .\scripts\windows\doctor_windows.ps1
+
+4. Put your files here:
+
+   - .\media\AAA.mp4
+   - .\lyrics\AAA.lrc
+
+5. Preprocess the song:
+
+   .\scripts\windows\preprocess_song.ps1 `
+     -Input .\media\AAA.mp4 `
+     -SongId AAA `
+     -Title "AAA" `
+     -Language ja `
+     -LyricsFile .\lyrics\AAA.lrc `
+     -UseDemucs `
+     -BuildCache
+
+6. Launch the player:
+
+   .\scripts\windows\start_player.ps1 -SongDir .\songs\AAA
