@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "karaoke-system-full"
+version = "0.1.0"
+description = "Multilingual karaoke player scaffold with lyric alignment and pitch scoring"
+requires-python = ">=3.11"
+
+[tool.setuptools.packages.find]
+include = ["karaoke_system*"]

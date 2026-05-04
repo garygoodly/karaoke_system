@@ -1,0 +1,5 @@
+# Optional real-time pitch backend. The project can fall back to a NumPy-based pitch estimator if this fails.
+aubio>=0.4.9
+
+# Optional source separation for generating karaoke / instrumental tracks.
+demucs>=4.0
