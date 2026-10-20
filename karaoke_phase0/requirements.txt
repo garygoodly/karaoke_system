@@ -1,0 +1,7 @@
+numpy>=1.24,<3
+scipy>=1.11
+librosa>=0.10.2
+soundfile>=0.12
+matplotlib>=3.8
+pytest>=8
+# Install separately for GPU: torch, torchaudio, demucs, whisperx (see README)
