@@ -1,0 +1,3 @@
+file,begin,end,speaker,overall_log_likelihood,speech_log_likelihood,phone_duration_deviation,max_running_short_interval,snr,intensity_deviation
+line0,0.0,9.0,paomo,-50.936610243055554,-44.60976028442383,0.7071067811865477,0,11.23344777542829,
+line3,0.0,8.0,paomo,-49.1033154296875,,0.0,0,4.749849625203748,

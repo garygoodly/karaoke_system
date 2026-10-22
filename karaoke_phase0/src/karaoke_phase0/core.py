@@ -61,60 +61,88 @@ def _normalize(s):
 
 
 def align(vocals, lyric_lines, out, language='zh', device='cpu', model_name=None):
-    """Experimental WhisperX forced alignment. Requires WhisperX and compatible align model.
-
-    Transcript anchors are estimated using Whisper transcription. Supplied lyrics are preserved.
-    Low-confidence or unmatched lines are flagged for manual review, never silently passed.
-    """
-    import whisperx
+    """Experimental supplied-lyrics alignment. Unmatched lines require manual review."""
     from difflib import SequenceMatcher
-    audio=whisperx.load_audio(str(vocals))
-    model=whisperx.load_model('small',device,compute_type='float16' if device=='cuda' else 'int8',language=language)
-    transcription=model.transcribe(audio,batch_size=4,language=language)
-    del model
-    recognized=transcription.get('segments',[])
-    if not recognized: raise RuntimeError('No speech segments found; manual review required')
-    align_model, metadata=whisperx.load_align_model(language_code=language,device=device,model_name=model_name)
-    # Use sequential fuzzy transcript matching to estimate line anchors, not a fabricated success.
-    cursor=0
-    prepared=[]
-    warnings=[]
-    for i,line in enumerate(lyric_lines):
-        target=_normalize(line['text'])
-        candidates=[]
-        for j in range(cursor,min(cursor+8,len(recognized))):
-            for end in range(j+1,min(j+5,len(recognized))+1):
-                chunk=''.join(x.get('text','') for x in recognized[j:end])
-                similarity=SequenceMatcher(None,target,_normalize(chunk)).ratio()
-                candidates.append((similarity,j,end))
+    import whisperx
+    audio = whisperx.load_audio(str(vocals))
+    compute_type = 'float16' if device == 'cuda' else 'int8'
+    import torch
+    from omegaconf.listconfig import ListConfig
+
+    asr = None
+    with torch.serialization.safe_globals([ListConfig]):
+        asr = whisperx.load_model(
+            'small',
+            device,
+            compute_type=compute_type,
+            language=language,
+        )
+    # asr = whisperx.load_model('small', device, compute_type=compute_type, language=language)
+    recognized = asr.transcribe(audio, batch_size=4, language=language).get('segments', [])
+    del asr
+    if not recognized:
+        raise RuntimeError('No vocal transcript found; check separation or review lyrics.')
+    model, metadata = whisperx.load_align_model(language_code=language, device=device, model_name=model_name)
+    cursor, prepared, warnings = 0, [], []
+    for idx, line in enumerate(lyric_lines):
+        target = _normalize(line['text'])
+        candidates = []
+        for j in range(cursor, min(cursor+12, len(recognized))):
+            for end in range(j+1, min(j+5, len(recognized))+1):
+                chunk = ''.join(r.get('text','') for r in recognized[j:end])
+                similarity = SequenceMatcher(None, target, _normalize(chunk)).ratio()
+                hint = line.get('hint_start')
+                distance = abs(float(recognized[j]['start'])-hint) if hint is not None else 0
+                score = similarity - min(distance/30, .25) if hint is not None else similarity
+                candidates.append((score, similarity, j, end))
         if not candidates:
-            warnings.append({'line':i,'reason':'no transcript anchor'})
+            warnings.append({'line_id':idx,'reason':'no transcript candidate'})
             continue
-        similarity,j,end=max(candidates)
-        if similarity<0.45:
-            warnings.append({'line':i,'reason':'low transcript match','similarity':round(similarity,3)})
+        _, similarity, j, end = max(candidates)
+        if similarity < .45:
+            warnings.append({'line_id':idx,'reason':'low transcript match','similarity':round(similarity,3)})
             continue
-        start=float(recognized[j]['start'])
-        finish=float(recognized[end-1]['end'])
-        if line['hint_start'] is not None:
-            if abs(start-line['hint_start'])>3:
-                warnings.append({'line':i,'reason':'LRC hint mismatch','offset_s':round(start-line['hint_start'],2)})
-            start=max(0,line['hint_start']-0.6)
-            finish=max(finish,start+0.5)
-        prepared.append({'start':start,'end':finish,'text':line['text'],'line_id':i})
-        cursor=end
-    if not prepared: raise RuntimeError('No lyrics aligned; review input/transcription')
-    result=whisperx.align(prepared,align_model,metadata,audio,device,return_char_alignments=True)
-    mapped=[]
-    for seg in result.get('segments',[]):
-        chars=seg.get('chars',[])
-        valid=[c for c in chars if 'start' in c and 'end' in c]
-        if not valid: warnings.append({'line':seg['line_id'],'reason':'no character timestamps'})
-        mapped.append({'line_id':seg['line_id'],'text':seg['text'], 'start':seg.get('start'),
-                       'end':seg.get('end'),'tokens':valid,'needs_review':len(valid)==0})
-    payload={'language':language,'lines':mapped,'warnings':warnings,
-             'status':'review_required' if warnings or len(mapped)!=len(lyric_lines) else 'provisional',
-             'note':'Automatic alignment is provisional until ground-truth validation.'}
-    Path(out).parent.mkdir(parents=True,exist_ok=True)
-    Path(out).write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding='utf-8')
+        start = float(recognized[j]['start'])
+        finish = float(recognized[end-1]['end'])
+        hint = line.get('hint_start')
+        if hint is not None and abs(start-hint)>3:
+            warnings.append({'line_id':idx,'reason':'LRC hint mismatch','offset_s':round(start-hint,2)})
+        if hint is not None and abs(start-hint)<=3:
+            start = max(0, min(start, hint)-.25)
+        prepared.append({'start':start,'end':max(finish,start+.2),'text':line['text']})
+        cursor = end
+    if not prepared:
+        raise RuntimeError('No lines matched; cannot produce a usable timeline.')
+    aligned = whisperx.align(prepared, model, metadata, audio, device, return_char_alignments=True)
+    # WhisperX does not guarantee preserving arbitrary input fields such as line_id.
+    # Preserve source order explicitly and never silently mark missing tokens as valid.
+    segments = aligned.get('segments', [])
+    matched_ids = [i for i in range(len(lyric_lines)) if i not in {w['line_id'] for w in warnings if w['reason'] in ('no transcript candidate','low transcript match')}]
+    mapped = []
+    for position, idx in enumerate(matched_ids):
+        if position >= len(segments):
+            warnings.append({'line_id':idx,'reason':'alignment segment missing'})
+            continue
+        seg = segments[position]
+        raw_tokens = seg.get('chars', []) or seg.get('words', [])
+        tokens = []
+        for token in raw_tokens:
+            if token.get('start') is not None and token.get('end') is not None:
+                tokens.append({'text':token.get('char',token.get('word','')),
+                               'start':float(token['start']),'end':float(token['end'])})
+        if not tokens:
+            warnings.append({'line_id':idx,'reason':'no timed characters'})
+        mapped.append({'line_id':idx,'text':lyric_lines[idx]['text'],
+                       'start':float(seg.get('start',prepared[position]['start'])),
+                       'end':float(seg.get('end',prepared[position]['end'])),
+                       'tokens':tokens,'needs_review':not bool(tokens)})
+    payload = {'language':language,'source_line_count':len(lyric_lines),
+               'lines':mapped,'warnings':warnings,
+               'status':'review_required' if warnings or len(mapped)!=len(lyric_lines) else 'provisional',
+               'note':'Provisional alignment; manual validation is required before Ready.'}
+    output = Path(out)
+    output.parent.mkdir(parents=True,exist_ok=True)
+    tmp = output.with_suffix('.tmp')
+    tmp.write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding='utf-8')
+    tmp.replace(output)
     return payload
