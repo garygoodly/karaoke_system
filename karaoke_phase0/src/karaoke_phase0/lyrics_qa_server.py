@@ -11,18 +11,22 @@ class _Server(ThreadingHTTPServer):
     allow_reuse_address = True
 
 
-def start_preview_server(page, vocals):
+def start_preview_server(page, vocals, instrumental=None):
     page, vocals = Path(page).resolve(), Path(vocals).resolve()
+    instrumental = Path(instrumental).resolve() if instrumental is not None else None
     if not page.is_file() or not vocals.is_file():
         raise FileNotFoundError('Lyrics QA HTML and generated/vocals.wav must exist')
+
+    if instrumental is not None and not instrumental.is_file():
+        raise FileNotFoundError('generated/instrumental.wav is missing')
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             route = urlsplit(self.path).path
-            if route not in ('/', '/vocals.wav'):
+            if route not in (('/', '/vocals.wav', '/instrumental.wav') if instrumental is not None else ('/', '/vocals.wav')):
                 self.send_error(404)
                 return
-            path = page if route == '/' else vocals
+            path = page if route == '/' else (vocals if route == '/vocals.wav' else instrumental)
             content_type = 'text/html; charset=utf-8' if route == '/' else 'audio/wav'
             size = path.stat().st_size
             range_header = self.headers.get('Range', '')

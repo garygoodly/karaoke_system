@@ -14,6 +14,7 @@ from .song_manager import import_song, list_songs, get_song, set_song_status
 from .separation import demucs_command, publish_stems
 from .alignment_workflow import read_timeline
 from .lyrics_preview import render as render_lyrics_preview
+from .lyrics_display_data import load_word_timings
 from .lyrics_qa_server import start_preview_server
 
 
@@ -49,7 +50,7 @@ class SongLibrary(QMainWindow):
         self.align_btn = QPushButton('Align Lyrics (GPU)')
         self.align_btn.clicked.connect(self.align_selected)
         buttons.addWidget(self.align_btn)
-        self.lyrics_preview_btn = QPushButton('Preview Lyrics QA')
+        self.lyrics_preview_btn = QPushButton('Karaoke Player / Lyrics QA')
         self.lyrics_preview_btn.clicked.connect(self.preview_lyrics)
         buttons.addWidget(self.lyrics_preview_btn)
         self.cancel_btn = QPushButton('Cancel Analysis')
@@ -235,14 +236,16 @@ class SongLibrary(QMainWindow):
         folder = Path(get_song(self.root, song_id)['folder'])
         try:
             timeline = read_timeline(folder)
-            page = render_lyrics_preview(timeline, folder / 'generated' / 'lyrics_qa.html')
-            server, url = start_preview_server(page, folder / 'generated' / 'vocals.wav')
+            page = render_lyrics_preview(timeline, folder / 'generated' / 'lyrics_qa.html',
+                                         word_timings=load_word_timings(folder), player_mode=True)
+            server, url = start_preview_server(page, folder / 'generated' / 'vocals.wav',
+                                               folder / 'generated' / 'instrumental.wav')
             self.qa_servers.append(server)
         except Exception as exc:
             QMessageBox.warning(self, 'Preview unavailable', str(exc))
             return
         webbrowser.open(url)
-        self.status_label.setText('Lyrics QA opened with automatic vocal audio loading.')
+        self.status_label.setText('Karaoke Player opened (Line Mode, instrumental by default).')
 
     def read_output(self):
         if self.process is None:

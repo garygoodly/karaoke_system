@@ -1,0 +1,44 @@
+{
+  "tokens": [
+    {
+      "text": "基",
+      "start": 1.02,
+      "end": 1.68,
+      "source": "mfa_phone_heuristic",
+      "needs_review": true
+    },
+    {
+      "text": "於",
+      "start": 1.68,
+      "end": 1.99,
+      "source": "mfa_phone_heuristic",
+      "needs_review": true
+    },
+    {
+      "text": "你",
+      "start": 1.99,
+      "end": 2.39,
+      "source": "mfa_word"
+    },
+    {
+      "text": "還",
+      "start": 2.39,
+      "end": 2.97,
+      "source": "mfa_word"
+    },
+    {
+      "text": "愛",
+      "start": 2.97,
+      "end": 3.21,
+      "source": "mfa_word"
+    },
+    {
+      "text": "我",
+      "start": 3.21,
+      "end": 5.34,
+      "source": "mfa_word"
+    }
+  ],
+  "unresolved": [],
+  "status": "experimental_review_required"
+}

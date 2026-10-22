@@ -1,0 +1,26 @@
+{
+  "status": "review_required",
+  "dictionary": {
+    "oov": [
+      "沫"
+    ],
+    "added": [
+      "沫",
+      "泡沫"
+    ],
+    "unresolved": [],
+    "requires_review": false,
+    "g2p_model": "mandarin_taiwan_mfa"
+  },
+  "clips": {
+    "line0": {
+      "tokens": 10,
+      "unresolved": []
+    },
+    "line3": {
+      "tokens": 6,
+      "unresolved": []
+    }
+  },
+  "note": "Experimental timings are clip-relative; do not overwrite lyrics_timeline.json."
+}

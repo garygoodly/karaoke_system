@@ -1,0 +1,72 @@
+{
+  "tokens": [
+    {
+      "text": "陽",
+      "start": 2.09,
+      "end": 2.48,
+      "source": "mfa_phone_heuristic",
+      "needs_review": true
+    },
+    {
+      "text": "光",
+      "start": 2.48,
+      "end": 2.79,
+      "source": "mfa_phone_heuristic",
+      "needs_review": true
+    },
+    {
+      "text": "下",
+      "start": 2.79,
+      "end": 3.38,
+      "source": "mfa_word"
+    },
+    {
+      "text": "的",
+      "start": 3.38,
+      "end": 3.63,
+      "source": "mfa_word"
+    },
+    {
+      "text": "泡",
+      "start": 3.63,
+      "end": 3.98,
+      "source": "mfa_phone_heuristic",
+      "needs_review": true
+    },
+    {
+      "text": "沫",
+      "start": 3.98,
+      "end": 4.91,
+      "source": "mfa_phone_heuristic",
+      "needs_review": true
+    },
+    {
+      "text": "是",
+      "start": 5.31,
+      "end": 5.88,
+      "source": "mfa_word"
+    },
+    {
+      "text": "彩",
+      "start": 5.88,
+      "end": 6.17,
+      "source": "mfa_phone_heuristic",
+      "needs_review": true
+    },
+    {
+      "text": "色",
+      "start": 6.17,
+      "end": 7.23,
+      "source": "mfa_phone_heuristic",
+      "needs_review": true
+    },
+    {
+      "text": "的",
+      "start": 7.23,
+      "end": 7.96,
+      "source": "mfa_word"
+    }
+  ],
+  "unresolved": [],
+  "status": "experimental_review_required"
+}
