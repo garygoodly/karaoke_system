@@ -236,8 +236,14 @@ class SongLibrary(QMainWindow):
         folder = Path(get_song(self.root, song_id)['folder'])
         try:
             timeline = read_timeline(folder)
+            reference_file = folder / 'generated' / 'reference_pitch.json'
+            reference_pitch = None
+            if reference_file.is_file():
+                import json
+                reference_pitch = json.loads(reference_file.read_text(encoding='utf-8'))
             page = render_lyrics_preview(timeline, folder / 'generated' / 'lyrics_qa.html',
-                                         word_timings=load_word_timings(folder), player_mode=True)
+                                         word_timings=load_word_timings(folder), player_mode=True,
+                                         reference_pitch=reference_pitch)
             server, url = start_preview_server(page, folder / 'generated' / 'vocals.wav',
                                                folder / 'generated' / 'instrumental.wav')
             self.qa_servers.append(server)

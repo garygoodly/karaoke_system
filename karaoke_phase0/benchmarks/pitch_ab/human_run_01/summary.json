@@ -1,0 +1,22 @@
+{
+  "input": "benchmarks\\pitch_ab\\human_test.wav",
+  "start_seconds": 0.0,
+  "duration_seconds": 15.0,
+  "yin": {
+    "frames": 1500,
+    "voiced_fraction": 0.9846666666666667,
+    "unvoiced_fraction": 0.01533333333333331,
+    "octave_sized_jumps_over_900_cents": 0,
+    "median_f0_hz": 213.7555265517543,
+    "hop_seconds": 0.01
+  },
+  "torchcrepe": {
+    "frames": 1500,
+    "voiced_fraction": 0.9853333333333333,
+    "unvoiced_fraction": 0.014666666666666717,
+    "octave_sized_jumps_over_900_cents": 0,
+    "median_f0_hz": 213.72576141357422,
+    "hop_seconds": 0.01
+  },
+  "caveat": "No ground truth. Voiced fraction and jumps measure behavior, not pitch accuracy. YIN here is a Python YIN-style reference, not an exact port of the browser implementation."
+}

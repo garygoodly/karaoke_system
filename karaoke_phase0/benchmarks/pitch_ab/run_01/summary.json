@@ -1,0 +1,22 @@
+{
+  "input": "songs\\song-3decb6500f5d\\generated\\vocals.wav",
+  "start_seconds": 20.0,
+  "duration_seconds": 30.0,
+  "yin": {
+    "frames": 3000,
+    "voiced_fraction": 0.6593333333333333,
+    "unvoiced_fraction": 0.3406666666666667,
+    "octave_sized_jumps_over_900_cents": 0,
+    "median_f0_hz": 206.6202886821365,
+    "hop_seconds": 0.01
+  },
+  "torchcrepe": {
+    "frames": 3000,
+    "voiced_fraction": 0.8403333333333334,
+    "unvoiced_fraction": 0.15966666666666662,
+    "octave_sized_jumps_over_900_cents": 0,
+    "median_f0_hz": 205.16018676757812,
+    "hop_seconds": 0.01
+  },
+  "caveat": "No ground truth. Voiced fraction and jumps measure behavior, not pitch accuracy. YIN here is a Python YIN-style reference, not an exact port of the browser implementation."
+}
