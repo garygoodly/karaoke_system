@@ -46,10 +46,20 @@ jobs:
           miniforge-variant: Miniforge3
           miniforge-version: latest
           auto-activate-base: false
-      - name: Verify FFmpeg
+      - name: Install and verify FFmpeg
         run: |
-          ffmpeg -version | Select-Object -First 1
-          ffprobe -version | Select-Object -First 1
+          choco install ffmpeg -y --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $chocoBin = Join-Path $env:ChocolateyInstall 'bin'
+          $env:PATH = "$chocoBin;$env:PATH"
+          $chocoBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          foreach ($tool in @('ffmpeg', 'ffprobe')) {
+            $cmd = Get-Command $tool -ErrorAction SilentlyContinue
+            if (-not $cmd) { throw "$tool not found after Chocolatey install" }
+            Write-Host "$tool location: $($cmd.Source)"
+            & $tool -version | Select-Object -First 1
+            if ($LASTEXITCODE -ne 0) { throw "$tool version check failed" }
+          }
       - name: Clean install (CPU inference, CUDA wheels permitted)
         env:
           UV_PROJECT_ENVIRONMENT: .venv-uv
