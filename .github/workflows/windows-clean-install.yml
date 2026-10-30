@@ -1,0 +1,75 @@
+name: Windows clean install
+on:
+  workflow_dispatch:
+    inputs:
+      download_mfa_models:
+        description: 'Also download all three Mandarin MFA models (slow/network-dependent)'
+        required: false
+        type: boolean
+        default: false
+  push:
+    paths:
+      - 'karaoke_phase0/setup_uv.ps1'
+      - 'karaoke_phase0/setup_uv.bat'
+      - 'karaoke_phase0/pyproject.toml'
+      - 'karaoke_phase0/uv.lock'
+      - 'karaoke_phase0/tests/**'
+      - '.github/workflows/windows-clean-install.yml'
+  pull_request:
+    paths:
+      - 'karaoke_phase0/setup_uv.ps1'
+      - 'karaoke_phase0/setup_uv.bat'
+      - 'karaoke_phase0/pyproject.toml'
+      - 'karaoke_phase0/uv.lock'
+      - 'karaoke_phase0/tests/**'
+      - '.github/workflows/windows-clean-install.yml'
+permissions:
+  contents: read
+jobs:
+  clean-windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: karaoke_phase0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: karaoke_phase0/uv.lock
+      - name: Install Miniforge
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-variant: Miniforge3
+          miniforge-version: latest
+          auto-activate-base: false
+      - name: Verify FFmpeg
+        run: |
+          ffmpeg -version | Select-Object -First 1
+          ffprobe -version | Select-Object -First 1
+      - name: Clean install (CPU inference, CUDA wheels permitted)
+        env:
+          UV_PROJECT_ENVIRONMENT: .venv-uv
+        run: |
+          $full = '${{ github.event_name }}' -eq 'workflow_dispatch' -and '${{ inputs.download_mfa_models }}' -eq 'true'
+          if ($full) {
+            & .\setup_uv.ps1
+          } else {
+            & .\setup_uv.ps1 -SkipMfaModels
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: MFA smoke checks
+        run: |
+          conda run -n karaoke-mfa python -c "import soundfile as sf; print(sf.__version__,sf.__libsndfile_version__)"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          conda run -n karaoke-mfa mfa version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Run tests
+        env:
+          UV_PROJECT_ENVIRONMENT: .venv-uv
+        run: |
+          uv run --no-sync python -m pytest -q
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
