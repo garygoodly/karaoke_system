@@ -80,6 +80,7 @@ jobs:
       - name: Run tests
         env:
           UV_PROJECT_ENVIRONMENT: .venv-uv
+          PYTHONPATH: src
         run: |
           uv run --no-sync python -m pytest -q
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
