@@ -16,3 +16,17 @@ separated/
 *.db-wal
 patches/
 backups/
+# Python environment
+.venv-uv/
+
+# Legacy patch documentation
+/README_*.md
+
+# Local recordings and generated benchmarks
+karaoke_pitch_capture*.csv
+benchmarks/pitch_score/
+benchmarks/note_scoring/
+
+# Temporary backups and archives
+*.bak
+*.zip
