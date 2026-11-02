@@ -3,11 +3,12 @@ import json
 from pathlib import Path
 
 
-def render(timeline, output, word_timings=None, player_mode=False, reference_pitch=None):
+def render(timeline, output, word_timings=None, player_mode=False, reference_pitch=None, vocal_activity=None):
     timeline = dict(timeline)
     timeline["word_timings"] = word_timings or {}
     timeline["player_mode"] = bool(player_mode)
     timeline["reference_pitch"] = reference_pitch or {"frames": []}
+    timeline["vocal_activity"] = vocal_activity or {"frames": []}
     payload = json.dumps(timeline, ensure_ascii=False).replace('<', '\\u003c').replace('>', '\\u003e').replace('&', '\\u0026')
     page = r'''<!doctype html><html lang="zh-Hant"><meta charset="utf-8"><title>Karaoke Lyrics QA</title>
 <style>
@@ -48,8 +49,13 @@ small,.muted{color:#aab4c2}.warn{color:#fbbf24}.issue{display:block;width:100%;b
 <label>Auto timing sync <input id="autoTimingSync" type="checkbox" checked></label> <span id="autoTimingStatus" aria-live="polite">Collecting pitch history</span>
 <label>Mic timing offset <input id="micTimingOffset" type="range" min="-500" max="500" step="10" value="0"> <output id="micTimingValue">0 ms</output></label>
 <div class="pitch-stats" aria-label="Reference pitch comparison"><div>Reference <strong id="referenceHz">—</strong></div><div>Difference <strong id="pitchDifference">—</strong></div></div>
+<div><button id="startPitchCapture" type="button">Start pitch capture</button> <button id="stopPitchCapture" type="button" disabled>Stop &amp; download CSV</button> <span id="pitchCaptureStatus">Not recording</span></div>
+<section id="singingScorePanel" aria-label="Singing score results" style="display:none;border:1px solid #334155;padding:12px;margin:10px 0;border-radius:8px" aria-live="polite">
+<strong>Experimental singing results</strong><div class="pitch-stats"><div>Pitch Accuracy <strong id="scoreAccuracy">—</strong></div><div>Singing Coverage <strong id="scoreCoverage">—</strong></div></div>
+<div class="pitch-stats"><div>Note-Based v2 <strong id="scoreNoteV2">—</strong></div><div>Note Coverage <strong id="scoreNoteCoverage">—</strong></div><div>Unscored Notes <strong id="scoreUnscoredNotes">—</strong></div></div><p id="scoreNoteDetails" class="muted"></p><p id="scoreDetails" class="muted"></p><small>Pitch accuracy uses matched voiced frames. Coverage is an estimated reference vocal-activity ratio. No overall score.</small>
+</section>
 <canvas id="pitchCanvas" width="760" height="140" aria-label="Recent microphone pitch history"></canvas>
-<p class="muted">Live F0 estimate only; no singing score. Use headphones to avoid music leaking into the mic.</p>
+<p class="muted">Live F0 estimate; experimental scores appear after stopping pitch capture. Use headphones to avoid music leaking into the mic.</p>
 </div>
 </section><p id="status"></p>
 <div class="modes" role="group" aria-label="Lyrics display mode"><button id="lineMode" type="button" class="selected">Line Mode</button><button id="wordMode" type="button">Word Mode</button></div><div id="line">按下播放開始檢查歌詞</div><p id="time"></p>
@@ -115,6 +121,7 @@ const pitchBackendStatus=document.getElementById('pitchBackendStatus');
 const crepeSmoothing=document.getElementById('crepeSmoothing');
 const crepePitchWindow=[];
 const referenceFrames=Array.isArray(DATA.reference_pitch?.frames)?DATA.reference_pitch.frames:[];
+const vocalActivityFrames=Array.isArray(DATA.vocal_activity?.frames)?DATA.vocal_activity.frames:[];
 const referenceHz=document.getElementById('referenceHz');
 const pitchDifference=document.getElementById('pitchDifference');
 const referenceSmoothing=document.getElementById('referenceSmoothing');
@@ -122,6 +129,125 @@ const micTimingOffset=document.getElementById('micTimingOffset');
 const micTimingValue=document.getElementById('micTimingValue');
 const autoTimingSync=document.getElementById('autoTimingSync'),autoTimingStatus=document.getElementById('autoTimingStatus');
 const micPitchSamples=[];let estimatedOffsetMs=0,offsetTrusted=false,lastAutoEstimate=0;
+// Record pitch with its aligned reference timeline. CSV stays in the browser until downloaded.
+const pitchCapture=[];let pitchCapturing=false,lastCaptureTime=-1;
+const captureStart=document.getElementById('startPitchCapture'),captureStop=document.getElementById('stopPitchCapture'),captureStatus=document.getElementById('pitchCaptureStatus');
+captureStart.onclick=()=>{document.getElementById('singingScorePanel').style.display='none';pitchCapture.length=0;lastCaptureTime=-1;pitchCapturing=true;captureStart.disabled=true;captureStop.disabled=false;captureStatus.textContent='Recording pitch…'};
+function csvCell(v){return v===null||v===undefined?'':String(v)}
+captureStop.onclick=()=>{
+  pitchCapturing=false;captureStart.disabled=false;captureStop.disabled=true;
+  const columns=['time_s','crepe_hz','crepe_periodicity','playback_time_s','offset_ms','offset_trusted','detector'];
+  const rows=[columns.join(',')].concat(pitchCapture.map(p=>columns.map(k=>csvCell(p[k])).join(',')));
+  const blob=new Blob([rows.join('\r\n')+'\r\n'],{type:'text/csv;charset=utf-8'});
+  const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='karaoke_pitch_capture_'+Date.now()+'.csv';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),2000);
+  captureStatus.textContent=pitchCapture.length+' samples saved';showCaptureScore();
+};
+// Browser preview mirrors the offline experimental scoring rules (no overall score).
+// Use the captured, already aligned time_s; do not apply offset_ms a second time.
+function nearestFrame(frames,t,tolerance){
+  let lo=0,hi=frames.length;
+  while(lo<hi){const mid=(lo+hi)>>>1;if(Number(frames[mid].time)<t)lo=mid+1;else hi=mid}
+  let best=null,dist=Infinity;
+  for(const k of [lo-1,lo])if(k>=0&&k<frames.length){const d=Math.abs(Number(frames[k].time)-t);if(d<dist){dist=d;best=frames[k]}}
+  return dist<=tolerance?best:null;
+}
+function scoreCapturedFrames(captured,reference,mask){
+  let matched=0,scoreSum=0,expected=0,userVoiced=0,referenceUnvoiced=0;
+  for(const row of captured){
+    const t=Number(row.time_s),hz=Number(row.crepe_hz),conf=row.crepe_periodicity===''?null:Number(row.crepe_periodicity);
+    if(!Number.isFinite(t))continue;
+    const goodUser=row.crepe_hz!==''&&Number.isFinite(hz)&&hz>0&&(conf===null||conf>=0.35);
+    const activity=nearestFrame(mask,t,0.06);
+    if(activity&&activity.active){expected++;if(goodUser)userVoiced++}
+    if(!goodUser)continue;
+    const ref=nearestFrame(reference,t,0.04);
+    if(!ref)continue;
+    const refHz=Number(ref.hz),refConf=ref.periodicity==null?null:Number(ref.periodicity);
+    if(ref.hz==null||!Number.isFinite(refHz)||refHz<=0||(refConf!==null&&refConf<0.35)){referenceUnvoiced++;continue}
+    const cents=Math.abs(1200*Math.log2(hz/refHz));
+    scoreSum+=cents<=50?100:Math.max(0,100*(300-cents)/250);
+    matched++;
+  }
+  return {pitchScore:matched?scoreSum/matched:null,coverage:expected?userVoiced/expected:null,
+          matched,expected,userVoiced,referenceUnvoiced,total:captured.length};
+}
+// Experimental note segmentation v2 ported from benchmark_note_scoring_v2.py.
+// Scores only successfully matched candidate notes; missing notes remain unscored.
+function noteCents(a,b){return 1200*Math.log2(b/a)}
+function noteMedian(values){const a=[...values].sort((x,y)=>x-y),n=a.length;return n%2?a[(n-1)/2]:(a[n/2-1]+a[n/2])/2}
+function validNoteHz(v){if(v===null||v===undefined||v==='')return null;const x=Number(v);return Number.isFinite(x)&&x>0?x:null}
+function segmentReferenceNotesV2(frames,start,end){
+  const selected=frames.filter(f=>Number(f.time)>=start&&Number(f.time)<=end).slice().sort((a,b)=>Number(a.time)-Number(b.time));
+  const values=selected.map((f,i)=>{
+    const v=validNoteHz(f.hz),p=f.periodicity;
+    if(v===null||(p!==null&&p!==undefined&&Number(p)<.35))return null;
+    const nearby=[];
+    for(let j=Math.max(0,i-2);j<Math.min(selected.length,i+3);j++){
+      const q=selected[j],qv=validNoteHz(q.hz),qp=q.periodicity;
+      if(qv!==null&&(qp===null||qp===undefined||Number(qp)>=.35)&&Math.abs(Number(q.time)-Number(f.time))<=.065&&Math.abs(noteCents(v,qv))<=180)nearby.push(Math.log2(qv));
+    }
+    return nearby.length?2**noteMedian(nearby):v;
+  });
+  const groups=[];let current=[];
+  function flush(){if(!current.length)return;
+    const duration=current[current.length-1][0]-current[0][0]+.02;
+    if(duration>=.22&&current.length>=3)groups.push({start:current[0][0],end:Math.min(end,current[current.length-1][0]+.02),reference_hz:noteMedian(current.map(x=>x[1])),reference_frames:current.length});
+  }
+  for(let i=0;i<selected.length;i++){
+    const v=values[i];if(v===null)continue;
+    const t=Number(selected[i].time);
+    if(current.length&&(t-current[current.length-1][0]>.12||Math.abs(noteCents(noteMedian(current.slice(-12).map(x=>x[1])),v))>110)){flush();current=[]}
+    current.push([t,v]);
+  }
+  flush();
+  const merged=[];
+  for(const note of groups){
+    const prev=merged[merged.length-1];
+    if(prev&&note.start-prev.end<=.12&&Math.abs(noteCents(prev.reference_hz,note.reference_hz))<=55){
+      prev.reference_hz=2**((Math.log2(prev.reference_hz)*prev.reference_frames+Math.log2(note.reference_hz)*note.reference_frames)/(prev.reference_frames+note.reference_frames));
+      prev.end=note.end;prev.reference_frames+=note.reference_frames;
+    }else merged.push({...note});
+  }
+  return merged;
+}
+function scoreCapturedNotesV2(captured,reference){
+  const users=captured.map(r=>({time:Number(r.time_s),hz:validNoteHz(r.crepe_hz),periodicity:r.crepe_periodicity===''?null:Number(r.crepe_periodicity)})).filter(r=>Number.isFinite(r.time)).sort((a,b)=>a.time-b.time);
+  if(users.length<2)return {score:null,coverage:null,referenceNotes:0,scoredNotes:0,unscoredNotes:0};
+  const notes=segmentReferenceNotesV2(reference,Math.max(0,users[0].time),users[users.length-1].time);
+  let total=0,scored=0;
+  for(const note of notes){
+    const lo=note.start+.06,hi=note.end-.06;
+    if(hi<=lo)continue;
+    const valid=users.filter(u=>u.time>=lo&&u.time<=hi&&u.hz!==null&&(u.periodicity===null||u.periodicity>=.35)).map(u=>u.hz);
+    if(valid.length<3)continue;
+    const err=Math.abs(noteCents(note.reference_hz,noteMedian(valid)));
+    total+=Math.max(0,Math.min(100,100*(300-Math.max(50,err))/250));scored++;
+  }
+  return {score:scored?total/scored:null,coverage:notes.length?scored/notes.length:null,referenceNotes:notes.length,scoredNotes:scored,unscoredNotes:notes.length-scored};
+}
+function showCaptureScore(){
+  const panel=document.getElementById('singingScorePanel');panel.style.display='block';
+  const result=scoreCapturedFrames(pitchCapture,referenceFrames,vocalActivityFrames);
+  document.getElementById('scoreAccuracy').textContent=result.pitchScore===null?'Not available':result.pitchScore.toFixed(2)+' / 100';
+  document.getElementById('scoreCoverage').textContent=result.coverage===null?'Mask missing':(100*result.coverage).toFixed(2)+'%';
+  const noteResult=scoreCapturedNotesV2(pitchCapture,referenceFrames);
+  document.getElementById('scoreNoteV2').textContent=noteResult.score===null?'Not available':noteResult.score.toFixed(2)+' / 100';
+  document.getElementById('scoreNoteCoverage').textContent=noteResult.coverage===null?'Not available':(100*noteResult.coverage).toFixed(2)+'%';
+  document.getElementById('scoreUnscoredNotes').textContent=String(noteResult.unscoredNotes);
+  document.getElementById('scoreNoteDetails').textContent=`${noteResult.scoredNotes}/${noteResult.referenceNotes} candidate notes scored. Experimental; no verified melody ground truth.`;
+  document.getElementById('scoreDetails').textContent=`${result.matched} matched pitch frames; ${result.userVoiced}/${result.expected} expected singing frames voiced; ${result.total} recorded frames.`;
+}
+function recordPitchSample(hz,periodicity){
+  if(!pitchCapturing||!micStream||!playerMode||instrumental.paused)return;
+  const t=instrumental.currentTime;
+  if(lastCaptureTime>=0&&t<lastCaptureTime-0.1){pitchCapturing=false;captureStart.disabled=false;captureStop.disabled=false;captureStatus.textContent='Seek detected: stop & download this segment';return}
+  lastCaptureTime=t;
+  const trusted=autoTimingSync.checked&&offsetTrusted;
+  const offset=autoTimingSync.checked?(trusted?estimatedOffsetMs:0):Number(micTimingOffset.value);
+  pitchCapture.push({time_s:(t-offset/1000).toFixed(4),crepe_hz:hz>0?hz.toFixed(3):'',crepe_periodicity:Number.isFinite(periodicity)?periodicity.toFixed(4):'',playback_time_s:t.toFixed(4),offset_ms:offset,offset_trusted:trusted?1:0,detector:pitchDetector.value});
+  captureStatus.textContent='Recording '+pitchCapture.length+' frames';
+}
+
 function resetAutoSync(){micPitchSamples.length=0;estimatedOffsetMs=0;offsetTrusted=false;lastAutoEstimate=0;autoTimingStatus.textContent='Collecting pitch history'}
 autoTimingSync.onchange=()=>{resetAutoSync();micTimingOffset.disabled=autoTimingSync.checked;updateReference()};
 micTimingOffset.disabled=true;
@@ -250,7 +376,7 @@ function connectPitchSocket(){
       if(data.error){pitchBackendStatus.textContent=data.error;showPitch(null);return}
       lastCrepeResult=performance.now();
       const rawHz=typeof data.hz==='number'&&Number.isFinite(data.hz)&&data.hz>0?data.hz:null;
-      showPitch(medianPitchFrame(rawHz,crepeSmoothing.checked));
+      showPitch(medianPitchFrame(rawHz,crepeSmoothing.checked));recordPitchSample(rawHz,Number(data.periodicity));
       pitchBackendStatus.textContent='torchcrepe · periodicity '+Number(data.periodicity||0).toFixed(2);
     }catch(err){pitchBackendStatus.textContent='Invalid pitch response'}
   };
@@ -354,7 +480,7 @@ function meterFrame(){
   if(performance.now()-lastPitchUpdate>=85){
     lastPitchUpdate=performance.now();
     if(pitchDetector.value==='yin'){
-      showPitch(detectPitch(samples,micContext.sampleRate,pitchMinimumRms()));
+      const yinHz=detectPitch(samples,micContext.sampleRate,pitchMinimumRms());showPitch(yinHz);recordPitchSample(yinHz,null);
     }else if(pitchSocket?.readyState===WebSocket.OPEN){
       // Send the latest raw microphone snapshot. Backend handles downsampling,
       // buffering and inference; no audio is uploaded to the internet.

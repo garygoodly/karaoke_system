@@ -12,7 +12,9 @@ def test_smoothing_ui_and_mode_isolation(tmp_path):
     html = output.read_text(encoding='utf-8')
     assert 'id="crepeSmoothing"' in html
     assert 'medianPitchFrame(rawHz,crepeSmoothing.checked)' in html
-    assert "showPitch(detectPitch(samples,micContext.sampleRate,pitchMinimumRms()))" in html
+    assert 'const yinHz=detectPitch(samples,micContext.sampleRate,pitchMinimumRms());' in html
+    assert 'showPitch(yinHz);' in html
+    assert 'recordPitchSample(yinHz,null);' in html
     assert 'function resetPitch(){' in html
     assert 'resetAutoSync();' in html
     assert 'crepePitchWindow.length=0;' in html

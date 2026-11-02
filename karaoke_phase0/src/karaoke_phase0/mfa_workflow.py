@@ -4,6 +4,7 @@ import json
 import re
 import shutil
 import subprocess
+from .process_environment import run_mfa_command
 from .mfa_g2p import extend_dictionary
 
 
@@ -43,7 +44,7 @@ def run_benchmark(corpus, output, base_dictionary, mfa_exe, converter,
     command = [str(mfa_exe),'align',str(input_dir),str(dictionary),acoustic_model,
                str(grid_dir), '--num_jobs','1',
                '--temporary_directory',str(mfa_temp), '--clean']
-    completed = subprocess.run(command,capture_output=True,text=True,timeout=timeout,check=False)
+    completed = run_mfa_command(command,capture_output=True,text=True,timeout=timeout,check=False)
     (output/'mfa.log').write_text((completed.stdout or '')+'\n'+(completed.stderr or ''),encoding='utf-8')
     if completed.returncode:
         raise RuntimeError(f'MFA align failed ({completed.returncode}); inspect mfa.log')

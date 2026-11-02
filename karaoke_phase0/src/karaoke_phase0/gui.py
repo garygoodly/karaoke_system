@@ -3,13 +3,14 @@ import sys
 import webbrowser
 from pathlib import Path
 
-from PySide6.QtCore import QProcess, QUrl, Qt
+from PySide6.QtCore import QProcess, QUrl, Qt, QTimer
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QLineEdit, QTextEdit, QComboBox, QFileDialog,
     QMessageBox, QTableWidget, QTableWidgetItem, QTabWidget, QProgressBar, QAbstractItemView,
 )
+from .version_info import git_version
 from .song_manager import import_song, list_songs, get_song, set_song_status
 from .separation import demucs_command, publish_stems
 from .alignment_workflow import read_timeline
@@ -28,7 +29,10 @@ class SongLibrary(QMainWindow):
         self.qa_servers = []
         self.active_song_id = None
         self.active_task = None
-        self.setWindowTitle('Karaoke Studio - Song Library')
+        self.preparation_folder = None
+        self.prepare_timer = QTimer(self)
+        self.prepare_timer.timeout.connect(self.poll_preparation)
+        self.setWindowTitle('Karaoke Studio - Song Library [Git ' + git_version(self.root) + ']')
         self.resize(960, 700)
         container = QWidget()
         self.setCentralWidget(container)
@@ -44,12 +48,15 @@ class SongLibrary(QMainWindow):
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         ll.addWidget(self.table)
         buttons = QHBoxLayout()
+        self.prepare_btn = QPushButton('Prepare Song / Retry')
+        self.prepare_btn.clicked.connect(self.prepare_selected)
+        buttons.addWidget(self.prepare_btn)
         self.analyze_btn = QPushButton('Analyze Selected (GPU)')
         self.analyze_btn.clicked.connect(self.analyze_selected)
-        buttons.addWidget(self.analyze_btn)
+        self.analyze_btn.hide()  # Legacy diagnostic action; not shown in main workflow.
         self.align_btn = QPushButton('Align Lyrics (GPU)')
         self.align_btn.clicked.connect(self.align_selected)
-        buttons.addWidget(self.align_btn)
+        self.align_btn.hide()  # Legacy diagnostic action; not shown in main workflow.
         self.lyrics_preview_btn = QPushButton('Karaoke Player / Lyrics QA')
         self.lyrics_preview_btn.clicked.connect(self.preview_lyrics)
         buttons.addWidget(self.lyrics_preview_btn)
@@ -65,7 +72,7 @@ class SongLibrary(QMainWindow):
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
         ll.addWidget(self.progress)
-        self.status_label = QLabel('Select a song, then Analyze Selected (GPU).')
+        self.status_label = QLabel('Select a song, then Prepare Song / Retry.')
         ll.addWidget(self.status_label)
         self.log = QTextEdit()
         self.log.setReadOnly(True)
@@ -141,13 +148,48 @@ class SongLibrary(QMainWindow):
             self.lyrics_file = path
             self.lyrics_label.setText(path)
 
+    @staticmethod
+    def display_song_status(folder, database_status):
+        """Derive player readiness from outputs, not the separation-only DB status.
+
+        Never display Ready based only on a checkpoint or database value.
+        """
+        import json
+        folder = Path(folder)
+        generated = folder / 'generated'
+        stems = all((generated / name).is_file() and
+                    (generated / name).stat().st_size > 0
+                    for name in ('vocals.wav', 'instrumental.wav'))
+        if not stems:
+            return database_status
+        for name in ('lyrics_timeline.json', 'reference_pitch.json'):
+            path = generated / name
+            if not path.is_file() or path.stat().st_size == 0:
+                return 'Separated (preparation incomplete)'
+            try:
+                data = json.loads(path.read_text(encoding='utf-8'))
+            except (OSError, UnicodeError, ValueError):
+                return 'Separated (preparation incomplete)'
+            if not isinstance(data, (dict, list)) or not data:
+                return 'Separated (preparation incomplete)'
+        checkpoint = generated / 'preparation_status.json'
+        if checkpoint.is_file():
+            try:
+                report = json.loads(checkpoint.read_text(encoding='utf-8'))
+                if report.get('status') in ('failed', 'review_required', 'running'):
+                    return 'Needs review' if report['status'] != 'running' else 'Preparing'
+            except (OSError, UnicodeError, ValueError, TypeError):
+                return 'Needs review'
+        return 'Ready'
+
     def refresh(self):
         selected_id = self.selected_song_id()
         self.songs = list_songs(self.root)
         self.table.setRowCount(len(self.songs))
         for i, song in enumerate(self.songs):
             for j, key in enumerate(('title', 'artist', 'language', 'status')):
-                item = QTableWidgetItem(str(song[key]))
+                value = self.display_song_status(song['folder'], song['status']) if key == 'status' else song[key]
+                item = QTableWidgetItem(str(value))
                 item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                 self.table.setItem(i, j, item)
             if song['id'] == selected_id:
@@ -158,6 +200,62 @@ class SongLibrary(QMainWindow):
         if row < 0 or row >= len(getattr(self, 'songs', [])):
             return None
         return self.songs[row]['id']
+
+    def prepare_selected(self):
+        if self.process is not None:
+            return
+        song_id = self.selected_song_id()
+        if not song_id:
+            QMessageBox.warning(self, 'No selection', 'Select a song first.')
+            return
+        folder = Path(get_song(self.root, song_id)['folder'])
+        project = Path(__file__).resolve().parents[2]
+        script = project / 'tools' / 'prepare_song.py'
+        if not script.is_file():
+            QMessageBox.warning(self, 'Missing preparation tool', str(script))
+            return
+        import torch
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.active_song_id = song_id
+        self.active_task = 'preparation'
+        self.preparation_folder = folder
+        self.log.clear()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.status_label.setText(f'Preparing song ({device}); completed steps will be reused...')
+        self.prepare_btn.setEnabled(False)
+        self.analyze_btn.setEnabled(False)
+        self.align_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(True)
+        self.process = QProcess(self)
+        self.process.setProcessChannelMode(QProcess.MergedChannels)
+        self.process.readyReadStandardOutput.connect(self.read_output)
+        self.process.errorOccurred.connect(self.process_error)
+        self.process.finished.connect(self.process_finished)
+        self.process.start(sys.executable, [str(script), '--song-folder', str(folder), '--device', device])
+        self.prepare_timer.start(500)
+
+    def poll_preparation(self):
+        if self.preparation_folder is None:
+            return
+        import json
+        status_file = self.preparation_folder / 'generated' / 'preparation_status.json'
+        if not status_file.is_file():
+            return
+        try:
+            report = json.loads(status_file.read_text(encoding='utf-8'))
+            steps = report.get('steps', {})
+            names = ('separation', 'alignment', 'reference_pitch')
+            done = sum(steps.get(name, {}).get('status') in ('completed', 'skipped_existing') for name in names)
+            current = next((name for name in names if steps.get(name, {}).get('status') == 'running'), None)
+            failed = next((name for name in names if steps.get(name, {}).get('status') == 'failed'), None)
+            self.progress.setValue(round(100 * done / len(names)))
+            if failed:
+                self.status_label.setText(f'Preparation failed at {failed}; see log. Retry will reuse completed steps.')
+            elif current:
+                self.status_label.setText(f'Preparing {current} ({done}/{len(names)} steps complete)...')
+        except (OSError, ValueError, TypeError):
+            pass  # Writer may be updating the checkpoint; retry on the next poll.
 
     def analyze_selected(self):
         if self.process is not None:
@@ -238,12 +336,17 @@ class SongLibrary(QMainWindow):
             timeline = read_timeline(folder)
             reference_file = folder / 'generated' / 'reference_pitch.json'
             reference_pitch = None
+            vocal_activity = None
+            mask_file = folder / 'generated' / 'vocal_activity.json'
+            if mask_file.is_file():
+                import json
+                vocal_activity = json.loads(mask_file.read_text(encoding='utf-8-sig'))
             if reference_file.is_file():
                 import json
                 reference_pitch = json.loads(reference_file.read_text(encoding='utf-8'))
             page = render_lyrics_preview(timeline, folder / 'generated' / 'lyrics_qa.html',
                                          word_timings=load_word_timings(folder), player_mode=True,
-                                         reference_pitch=reference_pitch)
+                                         reference_pitch=reference_pitch, vocal_activity=vocal_activity)
             server, url = start_preview_server(page, folder / 'generated' / 'vocals.wav',
                                                folder / 'generated' / 'instrumental.wav')
             self.qa_servers.append(server)
@@ -262,17 +365,28 @@ class SongLibrary(QMainWindow):
             self.log.ensureCursorVisible()
 
     def process_error(self, error):
-        self.status_label.setText('Demucs process error: ' + str(error))
+        self.status_label.setText('Process error: ' + str(error))
 
     def process_finished(self, exit_code, exit_status):
         self.read_output()
+        if self.active_task == 'preparation':
+            self.poll_preparation()
+            self.prepare_timer.stop()
+            self.preparation_folder = None
         song_id = self.active_song_id
         task = self.active_task
         self.active_song_id = None
         self.active_task = None
         success = exit_code == 0 and exit_status == QProcess.NormalExit
         try:
-            if task == 'alignment':
+            if task == 'preparation':
+                if success:
+                    self.status_label.setText('Song ready! Open Karaoke Player / Lyrics QA.')
+                    self.progress.setValue(100)
+                    set_song_status(self.root, song_id, 'separated')
+                else:
+                    self.status_label.setText(f'Preparation stopped (exit {exit_code}). Review log, then click Prepare Song / Retry.')
+            elif task == 'alignment':
                 if success:
                     song = get_song(self.root, song_id)
                     result = read_timeline(song['folder'])
@@ -297,7 +411,8 @@ class SongLibrary(QMainWindow):
         self.process.deleteLater()
         self.process = None
         self.progress.setRange(0, 100)
-        self.progress.setValue(100 if success else 0)
+        self.progress.setValue(100 if success else (self.progress.value() if task == 'preparation' else 0))
+        self.prepare_btn.setEnabled(True)
         self.analyze_btn.setEnabled(True)
         self.align_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)

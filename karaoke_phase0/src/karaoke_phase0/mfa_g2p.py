@@ -5,6 +5,7 @@ are read-only. Unknown or invalid outputs are reported, never guessed.
 """
 from pathlib import Path
 import subprocess
+from .process_environment import run_mfa_command
 import tempfile
 from .pronunciation import read_dictionary, build_dictionary
 
@@ -20,7 +21,7 @@ def generate_pronunciations(words, mfa_executable, model='mandarin_taiwan_mfa', 
         src.write_text('\n'.join(words) + '\n', encoding='utf-8')
         command = [str(mfa_executable), 'g2p', str(src), model, str(dst),
                    '--num_jobs', '1', '--no_use_mp']
-        result = subprocess.run(command, capture_output=True, text=True,
+        result = run_mfa_command(command, capture_output=True, text=True,
                                 timeout=timeout, check=False)
         if result.returncode != 0 or not dst.is_file():
             detail = (result.stderr or result.stdout or 'No dictionary produced')[-1200:]

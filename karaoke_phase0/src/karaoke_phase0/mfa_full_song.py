@@ -5,6 +5,7 @@ Never replaces the WhisperX timeline; output remains review_required.
 import json
 import re
 import subprocess
+from .process_environment import run_mfa_command
 import wave
 from pathlib import Path
 
@@ -128,7 +129,7 @@ def run_full_song(folder, output, base_dictionary, mfa_exe, converter,
     # Ask MFA's own Mandarin tokenizer which compound words are missing.
     # Lexicon-only segmentation cannot reliably discover words such as "泡沫".
     oov_dir = output/'oov_diagnostics'
-    scan = subprocess.run([str(mfa_exe), 'find_oovs', str(staging),
+    scan = run_mfa_command([str(mfa_exe), 'find_oovs', str(staging),
                            str(base_dictionary), str(oov_dir)],
                           capture_output=True, text=True, timeout=timeout, check=False)
     (output/'oov_scan.log').write_text((scan.stdout or '')+'\n'+(scan.stderr or ''),encoding='utf-8')
