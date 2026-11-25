@@ -66,3 +66,14 @@ def test_failure_checkpoint_and_retry(tmp_path, monkeypatch):
     assert result['steps']['separation']['status'] == 'completed'
     result = prepare_song(folder, runner=lambda cmd: pytest.fail('should skip'))
     assert result['status'] == 'ready'
+
+
+def test_review_required_timeline_never_marked_ready(tmp_path):
+    folder = song(tmp_path)
+    artifacts(folder)
+    (folder / 'generated' / 'lyrics_timeline.json').write_text(
+        json.dumps({'status': 'review_required', 'lines': [
+            {'text': 'Hello', 'needs_review': True}]}), encoding='utf-8')
+    result = prepare_song(folder, runner=lambda cmd: pytest.fail('unexpected process'))
+    assert result['status'] == 'review_required'
+    assert result['steps']['alignment']['status'] == 'skipped_existing'

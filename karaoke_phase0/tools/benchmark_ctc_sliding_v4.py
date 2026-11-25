@@ -69,14 +69,16 @@ def run(args):
     converter = OpenCC('t2s')
     processor = AutoProcessor.from_pretrained(args.model, trust_remote_code=False)
     tokenizer = processor.tokenizer
-    supported, excluded = {}, {}
+    from karaoke_phase0.alignment.ctc_text_coverage import prepare_ctc_text
+    supported, excluded, proxy_lines = {}, {}, {}
     for i, line in enumerate(lines):
-        normalized = ''.join(c for c in converter.convert(line['text']) if c.isalnum())
-        ids = tokenizer(normalized, add_special_tokens=False).input_ids
-        if not ids or tokenizer.unk_token_id in ids or tokenizer.decode(ids, skip_special_tokens=True).replace(' ', '') != normalized:
+        item = prepare_ctc_text(line['text'], converter, tokenizer)
+        if item['status'] == 'unsupported':
             excluded[i] = 'unknown_or_inexact_tokenization'
         else:
-            supported[i] = (normalized, ids)
+            supported[i] = (item['text'], item['ids'])
+            if item['status'] != 'exact':
+                proxy_lines[i] = item['proxies']
     groups = make_sliding_groups(lines, supported, args.group_size, args.max_gap)
     wav, sr = sf.read(args.audio, dtype='float32', always_2d=True)
     wav = wav.mean(axis=1)
@@ -122,15 +124,30 @@ def run(args):
         else:
             dt = (len(clip)/16000) / len(log_probs)
             line_bounds = boundaries(hit['token_spans'], [len(x) for x in ids_by_line], lambda frame: start+frame*dt)
+            # Persist one-to-one character token centers for optional word preview.
+            # If tokenizer merges/splits characters, mark anchors unavailable.
+            token_groups = []
+            offset = 0
+            for line_id, part_ids in zip(group, ids_by_line):
+                chars = list(supported[line_id][0])
+                spans = hit['token_spans'][offset:offset+len(part_ids)]
+                offset += len(part_ids)
+                if len(chars) == len(part_ids) and all(
+                    tokenizer(c, add_special_tokens=False).input_ids == [tid]
+                    for c, tid in zip(chars, part_ids)
+                ):
+                    token_groups.append([round(start + ((sp['start_frame']+sp['end_frame'])/2)*dt, 4) for sp in spans])
+                else:
+                    token_groups.append(None)
             row.update(status='candidate_needs_review', score=round(hit['total_log_probability'], 4), lines=[
                 {'line_id': i, 'text': lines[i]['text'], 'original_start': lines[i]['start'],
-                 **bound, 'delta_vs_original_seconds': round(bound['start_seconds']-float(lines[i]['start']), 3)}
-                for i, bound in zip(group, line_bounds)])
+                 **bound, 'character_anchors': anchors, 'delta_vs_original_seconds': round(bound['start_seconds']-float(lines[i]['start']), 3)}
+                for i, bound, anchors in zip(group, line_bounds, token_groups)])
         results.append(row)
         print('Group', ','.join(map(str, group)), row['status'])
     report = {'status': 'experimental_uncalibrated', 'method': 'sliding_window_joint_ctc_v4',
               'warning': 'Diagnostic only. Window hints depend on old timeline. Single observation is not consistency. No timeline modified.',
-              'model': args.model, 'group_size': args.group_size, 'stride': 1, 'excluded_lines': excluded, 'groups': results,
+              'model': args.model, 'group_size': args.group_size, 'stride': 1, 'excluded_lines': excluded, 'phonetic_proxy_lines': proxy_lines, 'groups': results,
               'consensus': summarize_consensus(results, lines, args.consistency_tolerance)}
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)

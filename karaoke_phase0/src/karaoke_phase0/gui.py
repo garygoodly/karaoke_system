@@ -14,6 +14,7 @@ from .version_info import git_version
 from .song_manager import import_song, list_songs, get_song, set_song_status
 from .separation import demucs_command, publish_stems
 from .alignment_workflow import read_timeline
+from .line_timing_overlay import line_start_overrides
 from .lyrics_preview import render as render_lyrics_preview
 from .lyrics_display_data import load_word_timings
 from .lyrics_qa_server import start_preview_server
@@ -334,6 +335,8 @@ class SongLibrary(QMainWindow):
         folder = Path(get_song(self.root, song_id)['folder'])
         try:
             timeline = read_timeline(folder)
+            timeline = dict(timeline)
+            timeline["line_start_overrides"] = line_start_overrides(folder, timeline)
             reference_file = folder / 'generated' / 'reference_pitch.json'
             reference_pitch = None
             vocal_activity = None

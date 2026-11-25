@@ -87,6 +87,8 @@ def timing_warnings(line_id, line, song_duration):
         previous_end = end
     if not tokens:
         issues.append({'line_id': line_id, 'reason': 'no timed characters'})
+    if len(tokens) >= 4 and sum((t.get('end', 0) - t.get('start', 0)) <= .04 for t in tokens if isinstance(t.get('start'), (int, float)) and isinstance(t.get('end'), (int, float))) >= len(tokens) / 2:
+        issues.append({'line_id': line_id, 'reason': 'collapsed character alignment'})
     return issues
 
 
@@ -239,6 +241,8 @@ def align_located_lines(whisperx, audio, located, lyric_lines, model, metadata,
             if actual != expected:
                 warnings.append({'line_id': idx, 'reason': 'incomplete character alignment',
                                  'expected_count': len(expected), 'timed_count': len(actual)})
+            # Do not promote the clip's padded bounds to reliable line boundaries.
+            # A collapsed alignment remains provisional for manual or model review.
             entry['needs_review'] = any(w['line_id'] == idx for w in warnings)
             mapped.append(entry)
         except Exception as exc:
